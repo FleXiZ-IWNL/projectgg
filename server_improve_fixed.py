@@ -603,7 +603,7 @@ class ModelHandler:
                         # Last resort: try to manually fix the model file config
                         try:
                             import h5py
-                            import json
+                            # json is already imported at the top of the file
                             
                             # Read the model config and fix batch_shape
                             with h5py.File(self.config.MODEL_PATH, 'r') as f:
@@ -876,9 +876,9 @@ class ModelHandler:
                                     try:
                                         model_json = json.dumps(model_config)
                                         logger.info(f"Model JSON serialized successfully, length: {len(model_json)} characters")
-                                    except Exception as json_error:
-                                        logger.error(f"JSON serialization failed: {json_error}")
-                                        raise ValueError(f"Cannot serialize model config to JSON: {json_error}")
+                                    except Exception as json_serialization_error:
+                                        logger.error(f"JSON serialization failed: {json_serialization_error}")
+                                        raise ValueError(f"Cannot serialize model config to JSON: {json_serialization_error}")
                                     
                                     self.model = tf.keras.models.model_from_json(
                                         model_json,

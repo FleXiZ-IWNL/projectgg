@@ -22,6 +22,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+snore_dataset/
+tests/
 
 # Database
 *.db
