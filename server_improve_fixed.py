@@ -607,15 +607,29 @@ class ModelHandler:
                             
                             # Read the model config and fix batch_shape
                             with h5py.File(self.config.MODEL_PATH, 'r') as f:
-                                model_config_str = f.attrs.get('model_config', b'{}')
+                                # Get model_config attribute
+                                if 'model_config' not in f.attrs:
+                                    raise ValueError("model_config not found in HDF5 file")
+                                
+                                model_config_str = f.attrs.get('model_config')
+                                if model_config_str is None:
+                                    raise ValueError("model_config is None in HDF5 file")
+                                
                                 # Handle both bytes and string
                                 if isinstance(model_config_str, bytes):
                                     model_config = json.loads(model_config_str.decode('utf-8'))
+                                elif isinstance(model_config_str, str):
+                                    model_config = json.loads(model_config_str)
                                 else:
+                                    # Try to convert to string first
                                     model_config = json.loads(str(model_config_str))
                                 
+                                if not isinstance(model_config, dict):
+                                    raise ValueError(f"model_config is not a dict: {type(model_config)}")
+                                
                                 # Recursively fix batch_shape and DTypePolicy in config
-                                def fix_config(obj):
+                                def fix_config(obj, path=""):
+                                    """Fix deprecated parameters in model config"""
                                     if isinstance(obj, dict):
                                         # Fix batch_shape in InputLayer
                                         if 'batch_shape' in obj:
@@ -624,27 +638,42 @@ class ModelHandler:
                                                 batch_shape = obj.pop('batch_shape')
                                                 if batch_shape and len(batch_shape) > 1:
                                                     obj['input_shape'] = batch_shape[1:]
+                                                    logger.debug(f"Fixed batch_shape at {path}")
                                             else:
                                                 # Remove batch_shape from other layers too
                                                 obj.pop('batch_shape', None)
                                         
-                                        # Fix DTypePolicy - convert to string
-                                        if 'dtype' in obj and isinstance(obj['dtype'], dict):
-                                            dtype_obj = obj['dtype']
-                                            if dtype_obj.get('class_name') == 'DTypePolicy':
-                                                # Extract the actual dtype name
-                                                dtype_name = dtype_obj.get('config', {}).get('name', 'float32')
-                                                obj['dtype'] = dtype_name
+                                        # Fix DTypePolicy - convert to string (in ALL layers and nested configs)
+                                        if 'dtype' in obj and obj['dtype'] is not None:
+                                            dtype_val = obj['dtype']
+                                            if isinstance(dtype_val, dict):
+                                                dtype_obj = dtype_val
+                                                class_name = dtype_obj.get('class_name') if dtype_obj else None
+                                                if class_name == 'DTypePolicy':
+                                                    # Extract the actual dtype name
+                                                    dtype_config = dtype_obj.get('config') if dtype_obj else None
+                                                    if isinstance(dtype_config, dict):
+                                                        dtype_name = dtype_config.get('name', 'float32')
+                                                    else:
+                                                        dtype_name = 'float32'
+                                                    obj['dtype'] = dtype_name
+                                                    logger.debug(f"Fixed DTypePolicy at {path} -> {dtype_name}")
                                         
-                                        # Recursively fix nested objects
+                                        # Fix nested config objects (CRITICAL - layers have config inside)
+                                        if 'config' in obj and isinstance(obj['config'], dict):
+                                            fix_config(obj['config'], f"{path}.config")
+                                        
+                                        # Recursively fix all nested objects
                                         for k, v in list(obj.items()):
                                             if isinstance(v, (dict, list)):
-                                                fix_config(v)
+                                                fix_config(v, f"{path}.{k}" if path else k)
                                     elif isinstance(obj, list):
-                                        for item in obj:
-                                            fix_config(item)
+                                        for i, item in enumerate(obj):
+                                            fix_config(item, f"{path}[{i}]")
                                 
+                                logger.info("Fixing model config for compatibility...")
                                 fix_config(model_config)
+                                logger.info("Model config fixed successfully")
                                 
                                 # Try loading with fixed config using CustomInputLayer
                                 self.model = tf.keras.models.model_from_json(
