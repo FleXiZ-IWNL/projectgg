@@ -675,13 +675,87 @@ class ModelHandler:
                                 fix_config(model_config)
                                 logger.info("Model config fixed successfully")
                                 
+                                # Validate model_config before proceeding
+                                if not isinstance(model_config, dict):
+                                    raise ValueError(f"model_config is not a dict after fixing: {type(model_config)}")
+                                
+                                # Check if it's the expected Keras model config structure
+                                if 'config' not in model_config and 'layers' not in model_config:
+                                    logger.warning(f"model_config keys: {list(model_config.keys())}")
+                                    # Try to find the actual structure
+                                    if 'model_config' in model_config:
+                                        logger.info("Found nested 'model_config', extracting...")
+                                        model_config = model_config['model_config']
+                                    else:
+                                        raise ValueError("model_config missing expected structure (no 'config' or 'layers' key)")
+                                
                                 # Try loading with fixed config using CustomInputLayer
-                                self.model = tf.keras.models.model_from_json(
-                                    json.dumps(model_config),
-                                    custom_objects={'InputLayer': CustomInputLayer}
-                                )
-                                # Load weights
-                                self.model.load_weights(self.config.MODEL_PATH)
+                                try:
+                                    logger.info("Attempting to load model from fixed JSON...")
+                                    
+                                    # Validate JSON serialization
+                                    try:
+                                        model_json = json.dumps(model_config)
+                                        logger.info(f"Model JSON serialized successfully, length: {len(model_json)} characters")
+                                    except Exception as json_error:
+                                        logger.error(f"JSON serialization failed: {json_error}")
+                                        raise ValueError(f"Cannot serialize model config to JSON: {json_error}")
+                                    
+                                    self.model = tf.keras.models.model_from_json(
+                                        model_json,
+                                        custom_objects={'InputLayer': CustomInputLayer}
+                                    )
+                                    logger.info("Model architecture loaded successfully")
+                                    
+                                    # Load weights - try different methods
+                                    logger.info("Loading model weights...")
+                                    try:
+                                        # Method 1: Direct load
+                                        self.model.load_weights(self.config.MODEL_PATH)
+                                        logger.info("Model weights loaded successfully!")
+                                    except Exception as weights_error:
+                                        logger.warning(f"Direct weight loading failed: {weights_error}")
+                                        # Method 2: Try loading from HDF5 group
+                                        try:
+                                            import h5py
+                                            with h5py.File(self.config.MODEL_PATH, 'r') as f:
+                                                if 'model_weights' in f:
+                                                    logger.info("Loading weights from 'model_weights' group...")
+                                                    self.model.load_weights(self.config.MODEL_PATH, by_name=False)
+                                                    logger.info("Model weights loaded from group successfully!")
+                                                else:
+                                                    logger.warning("'model_weights' group not found, trying by_name=True...")
+                                                    self.model.load_weights(self.config.MODEL_PATH, by_name=True)
+                                                    logger.info("Model weights loaded by name successfully!")
+                                        except Exception as weights_error2:
+                                            logger.error(f"All weight loading methods failed: {weights_error2}")
+                                            raise weights_error2
+                                    
+                                except Exception as load_error:
+                                    logger.error(f"Error loading model from fixed config: {load_error}")
+                                    logger.error(f"Error type: {type(load_error).__name__}")
+                                    import traceback
+                                    logger.error(f"Traceback: {traceback.format_exc()}")
+                                    # Check if it's a NoneType error
+                                    if "'NoneType' object is not subscriptable" in str(load_error):
+                                        logger.error("NoneType error detected - this might be due to incomplete config fix")
+                                        # Try to find what's None in the config
+                                        def find_none_values(obj, path=""):
+                                            if isinstance(obj, dict):
+                                                for k, v in obj.items():
+                                                    if v is None:
+                                                        logger.warning(f"Found None value at {path}.{k}")
+                                                    elif isinstance(v, (dict, list)):
+                                                        find_none_values(v, f"{path}.{k}" if path else k)
+                                            elif isinstance(obj, list):
+                                                for i, item in enumerate(obj):
+                                                    if item is None:
+                                                        logger.warning(f"Found None value at {path}[{i}]")
+                                                    elif isinstance(item, (dict, list)):
+                                                        find_none_values(item, f"{path}[{i}]")
+                                        logger.info("Scanning config for None values...")
+                                        find_none_values(model_config)
+                                    raise load_error
                         except Exception as e3:
                             logger.error(f"All model loading methods failed. Last error: {e3}")
                             # Set model to None so app can continue
