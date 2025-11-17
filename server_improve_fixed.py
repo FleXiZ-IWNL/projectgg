@@ -701,33 +701,72 @@ class ModelHandler:
                                 # First pass: Fix batch_shape to get input_shape
                                 fix_config(model_config)
                                 
-                                # Second pass: Fix build_input_shape using the input_shape we found
+                                # Second pass: Fix build_input_shape and ensure InputLayer has proper input_shape
+                                input_shape_found = None
+                                
+                                def find_input_shape(obj):
+                                    """Find input_shape from InputLayer"""
+                                    nonlocal input_shape_found
+                                    if isinstance(obj, dict):
+                                        if obj.get('class_name') == 'InputLayer':
+                                            input_shape = obj.get('input_shape')
+                                            if input_shape:
+                                                input_shape_found = input_shape
+                                                logger.info(f"Found input_shape from InputLayer: {input_shape}")
+                                        # Check in config
+                                        if 'config' in obj:
+                                            find_input_shape(obj['config'])
+                                        # Check in layers
+                                        if 'layers' in obj:
+                                            find_input_shape(obj['layers'])
+                                    elif isinstance(obj, list):
+                                        for item in obj:
+                                            find_input_shape(item)
+                                
+                                # Find input_shape first
+                                find_input_shape(model_config)
+                                
+                                # If not found, use default
+                                if input_shape_found is None:
+                                    input_shape_found = [216, 128]  # Default from error message
+                                    logger.warning(f"Input shape not found, using default: {input_shape_found}")
+                                
                                 def fix_build_input_shape(obj):
                                     """Fix build_input_shape after input_shape is fixed"""
                                     if isinstance(obj, dict):
                                         if 'build_input_shape' in obj:
                                             build_input_shape = obj['build_input_shape']
-                                            if isinstance(build_input_shape, list) and len(build_input_shape) > 0:
-                                                if build_input_shape[0] is None:
-                                                    # Try to get from layers
-                                                    if 'layers' in obj and isinstance(obj['layers'], list):
-                                                        for layer in obj['layers']:
-                                                            if isinstance(layer, dict):
-                                                                layer_config = layer.get('config', {})
-                                                                if layer_config.get('class_name') == 'InputLayer':
-                                                                    input_shape = layer_config.get('input_shape')
-                                                                    if input_shape:
-                                                                        # Convert to build_input_shape format [batch, ...]
-                                                                        if isinstance(input_shape, (list, tuple)):
-                                                                            build_input_shape[0] = [None] + list(input_shape)
-                                                                        else:
-                                                                            build_input_shape[0] = [None, input_shape]
-                                                                        logger.info(f"Fixed build_input_shape: {build_input_shape[0]}")
-                                                                        break
-                                                    # Fallback to default
-                                                    if build_input_shape[0] is None:
-                                                        build_input_shape[0] = [None, 216, 128]
-                                                        logger.warning(f"Using default build_input_shape: {build_input_shape[0]}")
+                                            if isinstance(build_input_shape, list):
+                                                if len(build_input_shape) == 0:
+                                                    build_input_shape.append([None] + list(input_shape_found))
+                                                    logger.info(f"Added build_input_shape: {build_input_shape[0]}")
+                                                elif build_input_shape[0] is None:
+                                                    build_input_shape[0] = [None] + list(input_shape_found)
+                                                    logger.info(f"Fixed build_input_shape: {build_input_shape[0]}")
+                                                elif isinstance(build_input_shape[0], list):
+                                                    # Check if first element is None or if list is invalid
+                                                    if len(build_input_shape[0]) == 0:
+                                                        # Empty list, rebuild
+                                                        build_input_shape[0] = [None] + list(input_shape_found)
+                                                        logger.info(f"Fixed empty build_input_shape: {build_input_shape[0]}")
+                                                    elif build_input_shape[0][0] is None and len(build_input_shape[0]) > 1:
+                                                        # Has None as first element but has other elements - might be partial
+                                                        # Rebuild to ensure consistency
+                                                        build_input_shape[0] = [None] + list(input_shape_found)
+                                                        logger.info(f"Fixed partial build_input_shape: {build_input_shape[0]}")
+                                                    elif build_input_shape[0][0] is None:
+                                                        # Only None, rebuild
+                                                        build_input_shape[0] = [None] + list(input_shape_found)
+                                                        logger.info(f"Fixed None-only build_input_shape: {build_input_shape[0]}")
+                                                elif build_input_shape[0] is None:
+                                                    # If it's just None, replace with proper list
+                                                    build_input_shape[0] = [None] + list(input_shape_found)
+                                                    logger.info(f"Fixed None build_input_shape: {build_input_shape[0]}")
+                                        
+                                        # Also ensure InputLayer has input_shape
+                                        if obj.get('class_name') == 'InputLayer' and 'input_shape' not in obj:
+                                            obj['input_shape'] = input_shape_found
+                                            logger.info(f"Added input_shape to InputLayer: {input_shape_found}")
                                         
                                         # Recursively check nested objects
                                         for v in obj.values():
