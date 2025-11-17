@@ -559,19 +559,101 @@ class ModelHandler:
     def _load_model(self):
         """Load AI model with automatic compatibility detection"""
         try:
-            # Load model
-            self.model = load_model(self.config.MODEL_PATH, compile=False)
+            # Try loading with custom objects to handle deprecated batch_shape
+            # First, try standard loading
+            try:
+                self.model = load_model(self.config.MODEL_PATH, compile=False)
+            except Exception as e:
+                # If loading fails due to batch_shape issue, try workarounds
+                if 'batch_shape' in str(e) or 'Unrecognized keyword arguments' in str(e):
+                    logger.warning(f"Standard model loading failed: {e}. Trying workaround for deprecated batch_shape...")
+                    
+                    # Try loading with a custom InputLayer that handles batch_shape
+                    class CustomInputLayer(tf.keras.layers.InputLayer):
+                        """Custom InputLayer that handles deprecated batch_shape"""
+                        @classmethod
+                        def from_config(cls, config):
+                            # Remove batch_shape from config if present
+                            config_copy = config.copy()
+                            if 'batch_shape' in config_copy:
+                                # Convert batch_shape to input_shape
+                                batch_shape = config_copy.pop('batch_shape')
+                                if batch_shape and len(batch_shape) > 1:
+                                    config_copy['input_shape'] = batch_shape[1:]
+                            return super().from_config(config_copy)
+                    
+                    try:
+                        # Try with custom_objects to handle InputLayer
+                        custom_objects = {
+                            'InputLayer': CustomInputLayer
+                        }
+                        self.model = tf.keras.models.load_model(
+                            self.config.MODEL_PATH, 
+                            compile=False,
+                            custom_objects=custom_objects
+                        )
+                    except Exception as e2:
+                        logger.warning(f"Custom InputLayer loading failed: {e2}. Trying direct HDF5 load...")
+                        # Last resort: try to manually fix the model file config
+                        try:
+                            import h5py
+                            import json
+                            
+                            # Read the model config and fix batch_shape
+                            with h5py.File(self.config.MODEL_PATH, 'r') as f:
+                                model_config = json.loads(f.attrs.get('model_config', '{}').decode('utf-8'))
+                                
+                                # Recursively fix batch_shape in config
+                                def fix_batch_shape(obj):
+                                    if isinstance(obj, dict):
+                                        if 'batch_shape' in obj and 'class_name' in obj:
+                                            if obj['class_name'] == 'InputLayer':
+                                                # Convert batch_shape to input_shape
+                                                batch_shape = obj.pop('batch_shape')
+                                                if batch_shape and len(batch_shape) > 1:
+                                                    obj['input_shape'] = batch_shape[1:]
+                                        for v in obj.values():
+                                            fix_batch_shape(v)
+                                    elif isinstance(obj, list):
+                                        for item in obj:
+                                            fix_batch_shape(item)
+                                
+                                fix_batch_shape(model_config)
+                                
+                                # Try loading with fixed config
+                                self.model = tf.keras.models.model_from_json(
+                                    json.dumps(model_config),
+                                    custom_objects={}
+                                )
+                                # Load weights
+                                self.model.load_weights(self.config.MODEL_PATH)
+                        except Exception as e3:
+                            logger.error(f"All model loading methods failed. Last error: {e3}")
+                            raise e3
+                else:
+                    raise
+            
+            # Check if model was successfully loaded
+            if self.model is None:
+                self.model_type = 'unknown'
+                self.data_store.update_status(model_loaded=False)
+                self.data_store.add_log_entry("⚠️ Model not loaded - prediction features disabled")
+                logger.warning("Model is None - prediction features will be disabled")
+                return
             
             # Detect model type based on architecture
             self.model_type = self._detect_model_type()
             
             # Recompile model
-            self.model.compile(
-                optimizer='adam',
-                loss='binary_crossentropy',
-                metrics=['accuracy'],
-                run_eagerly=False
-            )
+            try:
+                self.model.compile(
+                    optimizer='adam',
+                    loss='binary_crossentropy',
+                    metrics=['accuracy'],
+                    run_eagerly=False
+                )
+            except Exception as e:
+                logger.warning(f"Model compilation failed: {e}. Model may still work for inference.")
             
             # Load metadata if available
             if os.path.exists(self.config.MODEL_METADATA_PATH):
@@ -594,11 +676,16 @@ class ModelHandler:
             error_msg = f"❌ Model loading failed: {str(e)}"
             self.data_store.add_log_entry(error_msg)
             logger.error(error_msg)
-            raise ModelLoadError(error_msg)
+            # Don't raise error - allow app to start without model (for testing/debugging)
+            # raise ModelLoadError(error_msg)
+            logger.warning("Continuing without model - some features will be disabled")
     
     def _detect_model_type(self):
         """Detect whether this is a legacy or improved model"""
         try:
+            if self.model is None:
+                return 'unknown'
+            
             input_shape = self.model.input_shape
             logger.info(f"Model input shape: {input_shape}")
             
@@ -813,10 +900,24 @@ class SnoreDetectionSystem:
         self.config = SystemConfig()
         self.data_store = ThreadSafeData()
         
-        # Initialize components
-        self.gpio_controller = GPIOController(self.config, self.data_store)
-        self.audio_processor = AudioProcessor(self.config, self.data_store)
-        self.model_handler = ModelHandler(self.config, self.data_store)
+        # Initialize components (with error handling)
+        try:
+            self.gpio_controller = GPIOController(self.config, self.data_store)
+        except Exception as e:
+            logger.warning(f"GPIO controller initialization failed: {e}")
+            self.gpio_controller = None
+        
+        try:
+            self.audio_processor = AudioProcessor(self.config, self.data_store)
+        except Exception as e:
+            logger.warning(f"Audio processor initialization failed: {e}")
+            self.audio_processor = None
+        
+        try:
+            self.model_handler = ModelHandler(self.config, self.data_store)
+        except Exception as e:
+            logger.warning(f"Model handler initialization failed: {e}")
+            self.model_handler = None
         
         # Auto detection
         self._auto_detection_thread = None
@@ -1211,8 +1312,14 @@ def create_app():
     db_manager_global = db_manager
     auth_middleware = AuthMiddleware(db_manager)
     
-    # Initialize system
-    snore_system = SnoreDetectionSystem()
+    # Initialize system (with error handling to allow app to start even if system init fails)
+    try:
+        snore_system = SnoreDetectionSystem()
+    except Exception as e:
+        logger.error(f"Failed to initialize SnoreDetectionSystem: {e}")
+        logger.warning("App will start but system features may be limited")
+        # Create a minimal system object to prevent errors
+        snore_system = None
     
     @app.route('/')
     @auth_middleware.require_auth
@@ -1876,12 +1983,34 @@ def create_app():
     return app
 
 # Create app instance for gunicorn (production)
+# Always create app for gunicorn, but skip if running with Flask dev server
+# Gunicorn doesn't set WERKZEUG_RUN_MAIN, so we create the app here
+# Flask dev server sets it, so we skip here and create in __main__
 if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
     try:
         app = create_app()
+        if app is None:
+            logger.error("create_app() returned None")
+            # Force app creation
+            app = create_app()
     except Exception as e:
         logger.error(f"Failed to create app: {str(e)}")
-        app = None
+        import traceback
+        logger.error(traceback.format_exc())
+        # Try one more time
+        try:
+            app = create_app()
+        except Exception as e2:
+            logger.error(f"Failed to create app on retry: {str(e2)}")
+            logger.error(traceback.format_exc())
+            # Create a minimal Flask app so gunicorn doesn't fail
+            app = Flask(__name__)
+            @app.route('/')
+            def health():
+                return jsonify({"status": "error", "message": "App initialization failed"}), 500
+else:
+    # Running with Flask dev server, app will be created in __main__
+    app = None
 
 # --- Main Entry Point ---
 if __name__ == "__main__":
