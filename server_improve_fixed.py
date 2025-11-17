@@ -582,6 +582,12 @@ class ModelHandler:
                                     config_copy['input_shape'] = batch_shape[1:]
                             return super().from_config(config_copy)
                     
+                    # Register CustomInputLayer globally
+                    try:
+                        tf.keras.utils.register_keras_serializable('custom', 'InputLayer')(CustomInputLayer)
+                    except:
+                        pass  # May already be registered
+                    
                     try:
                         # Try with custom_objects to handle InputLayer
                         custom_objects = {
@@ -608,27 +614,42 @@ class ModelHandler:
                                 else:
                                     model_config = json.loads(str(model_config_str))
                                 
-                                # Recursively fix batch_shape in config
-                                def fix_batch_shape(obj):
+                                # Recursively fix batch_shape and DTypePolicy in config
+                                def fix_config(obj):
                                     if isinstance(obj, dict):
-                                        if 'batch_shape' in obj and 'class_name' in obj:
-                                            if obj['class_name'] == 'InputLayer':
+                                        # Fix batch_shape in InputLayer
+                                        if 'batch_shape' in obj:
+                                            if obj.get('class_name') == 'InputLayer':
                                                 # Convert batch_shape to input_shape
                                                 batch_shape = obj.pop('batch_shape')
                                                 if batch_shape and len(batch_shape) > 1:
                                                     obj['input_shape'] = batch_shape[1:]
-                                        for v in obj.values():
-                                            fix_batch_shape(v)
+                                            else:
+                                                # Remove batch_shape from other layers too
+                                                obj.pop('batch_shape', None)
+                                        
+                                        # Fix DTypePolicy - convert to string
+                                        if 'dtype' in obj and isinstance(obj['dtype'], dict):
+                                            dtype_obj = obj['dtype']
+                                            if dtype_obj.get('class_name') == 'DTypePolicy':
+                                                # Extract the actual dtype name
+                                                dtype_name = dtype_obj.get('config', {}).get('name', 'float32')
+                                                obj['dtype'] = dtype_name
+                                        
+                                        # Recursively fix nested objects
+                                        for k, v in list(obj.items()):
+                                            if isinstance(v, (dict, list)):
+                                                fix_config(v)
                                     elif isinstance(obj, list):
                                         for item in obj:
-                                            fix_batch_shape(item)
+                                            fix_config(item)
                                 
-                                fix_batch_shape(model_config)
+                                fix_config(model_config)
                                 
-                                # Try loading with fixed config
+                                # Try loading with fixed config using CustomInputLayer
                                 self.model = tf.keras.models.model_from_json(
                                     json.dumps(model_config),
-                                    custom_objects={}
+                                    custom_objects={'InputLayer': CustomInputLayer}
                                 )
                                 # Load weights
                                 self.model.load_weights(self.config.MODEL_PATH)
@@ -636,9 +657,12 @@ class ModelHandler:
                             logger.error(f"All model loading methods failed. Last error: {e3}")
                             # Set model to None so app can continue
                             self.model = None
-                            raise e3
+                            # Don't raise - allow app to continue without model
+                            logger.warning("Model loading failed - app will continue without model")
                 else:
-                    raise
+                    # For other errors, still try to set model to None and continue
+                    logger.error(f"Model loading failed with unexpected error: {e}")
+                    self.model = None
             
             # Check if model was successfully loaded
             if self.model is None:
