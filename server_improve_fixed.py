@@ -631,18 +631,27 @@ class ModelHandler:
                                 def fix_config(obj, path=""):
                                     """Fix deprecated parameters in model config"""
                                     if isinstance(obj, dict):
-                                        # Fix batch_shape in InputLayer
-                                        if 'batch_shape' in obj:
-                                            if obj.get('class_name') == 'InputLayer':
-                                                # Convert batch_shape to input_shape
+                                        # Fix batch_shape in InputLayer (check both top level and in config)
+                                        if obj.get('class_name') == 'InputLayer':
+                                            # Check for batch_shape at top level
+                                            if 'batch_shape' in obj:
                                                 batch_shape = obj.pop('batch_shape')
                                                 if batch_shape and len(batch_shape) > 1:
                                                     input_shape = batch_shape[1:]  # Remove batch dimension
                                                     obj['input_shape'] = input_shape
-                                                    logger.debug(f"Fixed batch_shape at {path}: {batch_shape} -> {input_shape}")
-                                            else:
-                                                # Remove batch_shape from other layers too
-                                                obj.pop('batch_shape', None)
+                                                    logger.info(f"Fixed batch_shape at {path}: {batch_shape} -> {input_shape}")
+                                            # Also check in config
+                                            if 'config' in obj and isinstance(obj['config'], dict):
+                                                config = obj['config']
+                                                if 'batch_shape' in config:
+                                                    batch_shape = config.pop('batch_shape')
+                                                    if batch_shape and len(batch_shape) > 1:
+                                                        input_shape = batch_shape[1:]
+                                                        config['input_shape'] = input_shape
+                                                        logger.info(f"Fixed batch_shape in config at {path}: {batch_shape} -> {input_shape}")
+                                        elif 'batch_shape' in obj:
+                                            # Remove batch_shape from other layers too
+                                            obj.pop('batch_shape', None)
                                         
                                         # Fix build_input_shape - CRITICAL for model loading
                                         if 'build_input_shape' in obj:
@@ -721,11 +730,17 @@ class ModelHandler:
                                 # Second pass: Fix build_input_shape and ensure InputLayer has proper input_shape
                                 input_shape_found = None
                                 
-                                def find_input_shape(obj, path=""):
+                                def find_input_shape(obj, path="", depth=0):
                                     """Find input_shape from InputLayer - check both config and top level"""
                                     nonlocal input_shape_found
+                                    if depth > 20:  # Prevent infinite recursion
+                                        return
+                                    
                                     if isinstance(obj, dict):
-                                        if obj.get('class_name') == 'InputLayer':
+                                        # Check if this is an InputLayer
+                                        class_name = obj.get('class_name')
+                                        if class_name == 'InputLayer':
+                                            logger.debug(f"Found InputLayer at {path}")
                                             # Check in config first (most common location)
                                             if 'config' in obj and isinstance(obj['config'], dict):
                                                 config = obj['config']
@@ -734,33 +749,42 @@ class ModelHandler:
                                                 if input_shape:
                                                     input_shape_found = input_shape
                                                     logger.info(f"Found input_shape from InputLayer config at {path}: {input_shape}")
+                                                    return  # Found it, stop searching
                                                 # Also check for batch_shape (should have been converted but check anyway)
                                                 elif 'batch_shape' in config:
                                                     batch_shape = config.get('batch_shape')
                                                     if batch_shape and len(batch_shape) > 1:
                                                         input_shape_found = list(batch_shape[1:])
-                                                        logger.info(f"Found input_shape from batch_shape at {path}: {input_shape_found}")
+                                                        logger.info(f"Found input_shape from batch_shape in config at {path}: {input_shape_found}")
+                                                        return
                                             # Also check at top level
-                                            if input_shape_found is None:
-                                                input_shape = obj.get('input_shape')
-                                                if input_shape:
-                                                    input_shape_found = input_shape
-                                                    logger.info(f"Found input_shape from InputLayer at {path}: {input_shape}")
-                                                # Check for batch_shape at top level
-                                                elif 'batch_shape' in obj:
-                                                    batch_shape = obj.get('batch_shape')
-                                                    if batch_shape and len(batch_shape) > 1:
-                                                        input_shape_found = list(batch_shape[1:])
-                                                        logger.info(f"Found input_shape from batch_shape at {path}: {input_shape_found}")
+                                            input_shape = obj.get('input_shape')
+                                            if input_shape:
+                                                input_shape_found = input_shape
+                                                logger.info(f"Found input_shape from InputLayer at {path}: {input_shape}")
+                                                return
+                                            # Check for batch_shape at top level
+                                            elif 'batch_shape' in obj:
+                                                batch_shape = obj.get('batch_shape')
+                                                if batch_shape and len(batch_shape) > 1:
+                                                    input_shape_found = list(batch_shape[1:])
+                                                    logger.info(f"Found input_shape from batch_shape at {path}: {input_shape_found}")
+                                                    return
+                                        
+                                        # Continue searching in nested structures
                                         # Check in config
                                         if 'config' in obj:
-                                            find_input_shape(obj['config'], f"{path}.config" if path else "config")
-                                        # Check in layers
+                                            find_input_shape(obj['config'], f"{path}.config" if path else "config", depth + 1)
+                                        # Check in layers (important - layers are usually in config.layers)
                                         if 'layers' in obj:
-                                            find_input_shape(obj['layers'], f"{path}.layers" if path else "layers")
+                                            find_input_shape(obj['layers'], f"{path}.layers" if path else "layers", depth + 1)
+                                        # Also check if this dict itself contains layers (some structures have layers at top level)
+                                        for key, value in obj.items():
+                                            if key not in ['class_name', 'config', 'layers'] and isinstance(value, (dict, list)):
+                                                find_input_shape(value, f"{path}.{key}" if path else key, depth + 1)
                                     elif isinstance(obj, list):
                                         for i, item in enumerate(obj):
-                                            find_input_shape(item, f"{path}[{i}]" if path else f"[{i}]")
+                                            find_input_shape(item, f"{path}[{i}]" if path else f"[{i}]", depth + 1)
                                 
                                 # Find input_shape first (after first pass has converted batch_shape)
                                 logger.info("Searching for input_shape in model config...")
