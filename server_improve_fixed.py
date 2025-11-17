@@ -740,33 +740,37 @@ class ModelHandler:
                                                 if len(build_input_shape) == 0:
                                                     build_input_shape.append([None] + list(input_shape_found))
                                                     logger.info(f"Added build_input_shape: {build_input_shape[0]}")
-                                                elif build_input_shape[0] is None:
-                                                    build_input_shape[0] = [None] + list(input_shape_found)
-                                                    logger.info(f"Fixed build_input_shape: {build_input_shape[0]}")
-                                                elif isinstance(build_input_shape[0], list):
-                                                    # Check if first element is None or if list is invalid
-                                                    if len(build_input_shape[0]) == 0:
-                                                        # Empty list, rebuild
+                                                else:
+                                                    # Always rebuild to ensure correct structure
+                                                    # This handles all cases: None, empty list, wrong structure, etc.
+                                                    try:
+                                                        # Try to access to see if it's valid
+                                                        test = build_input_shape[0]
+                                                        if test is None or (isinstance(test, list) and (len(test) == 0 or test[0] is None and len(test) != len(input_shape_found) + 1)):
+                                                            # Invalid structure, rebuild
+                                                            build_input_shape[0] = [None] + list(input_shape_found)
+                                                            logger.info(f"Fixed build_input_shape: {build_input_shape[0]}")
+                                                        elif isinstance(test, list) and len(test) > 0:
+                                                            # Check if structure is correct
+                                                            expected = [None] + list(input_shape_found)
+                                                            if len(test) != len(expected) or (test[0] is None and test[1:] != list(input_shape_found)):
+                                                                build_input_shape[0] = expected
+                                                                logger.info(f"Rebuilt build_input_shape: {build_input_shape[0]}")
+                                                    except (TypeError, IndexError):
+                                                        # Can't access, rebuild
                                                         build_input_shape[0] = [None] + list(input_shape_found)
-                                                        logger.info(f"Fixed empty build_input_shape: {build_input_shape[0]}")
-                                                    elif build_input_shape[0][0] is None and len(build_input_shape[0]) > 1:
-                                                        # Has None as first element but has other elements - might be partial
-                                                        # Rebuild to ensure consistency
-                                                        build_input_shape[0] = [None] + list(input_shape_found)
-                                                        logger.info(f"Fixed partial build_input_shape: {build_input_shape[0]}")
-                                                    elif build_input_shape[0][0] is None:
-                                                        # Only None, rebuild
-                                                        build_input_shape[0] = [None] + list(input_shape_found)
-                                                        logger.info(f"Fixed None-only build_input_shape: {build_input_shape[0]}")
-                                                elif build_input_shape[0] is None:
-                                                    # If it's just None, replace with proper list
-                                                    build_input_shape[0] = [None] + list(input_shape_found)
-                                                    logger.info(f"Fixed None build_input_shape: {build_input_shape[0]}")
+                                                        logger.info(f"Fixed unaccessible build_input_shape: {build_input_shape[0]}")
                                         
-                                        # Also ensure InputLayer has input_shape
-                                        if obj.get('class_name') == 'InputLayer' and 'input_shape' not in obj:
-                                            obj['input_shape'] = input_shape_found
-                                            logger.info(f"Added input_shape to InputLayer: {input_shape_found}")
+                                        # Also ensure InputLayer has input_shape in config
+                                        if obj.get('class_name') == 'InputLayer':
+                                            # Check if input_shape is in config
+                                            if 'config' in obj and isinstance(obj['config'], dict):
+                                                if 'input_shape' not in obj['config']:
+                                                    obj['config']['input_shape'] = input_shape_found
+                                                    logger.info(f"Added input_shape to InputLayer config: {input_shape_found}")
+                                            elif 'input_shape' not in obj:
+                                                obj['input_shape'] = input_shape_found
+                                                logger.info(f"Added input_shape to InputLayer: {input_shape_found}")
                                         
                                         # Recursively check nested objects
                                         for v in obj.values():
