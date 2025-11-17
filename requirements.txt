@@ -3,7 +3,12 @@ numpy==1.24.3
 librosa==0.10.1
 sounddevice==0.4.6
 soundfile==0.12.1
-tensorflow==2.15.0
+# TensorFlow version options:
+# - 2.13.1 (current, available) - latest available version in your pip repository
+# - 2.13.0 (alternative) - stable version
+# - 2.12.1 (alternative) - older, but stable
+# NOTE: TensorFlow 2.15.0 requires Python 3.9-3.11 and may not be available in all repositories
+tensorflow==2.13.0
 psycopg2-binary==2.9.9
 gunicorn==21.2.0
 python-dotenv==1.0.0

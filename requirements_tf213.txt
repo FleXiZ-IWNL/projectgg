@@ -1,0 +1,14 @@
+Flask==3.0.0
+numpy==1.24.3
+librosa==0.10.1
+sounddevice==0.4.6
+soundfile==0.12.1
+# TensorFlow 2.13.0 - Alternative version if model compatibility issues persist
+# WARNING: This version may have security vulnerabilities and performance issues
+# RECOMMENDED: Train new model with TensorFlow 2.15.0 instead
+tensorflow==2.13.0
+psycopg2-binary==2.9.9
+gunicorn==21.2.0
+python-dotenv==1.0.0
+requests==2.31.0
+

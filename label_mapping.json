@@ -1,0 +1,10 @@
+{
+  "classes": [
+    "not_snoring",
+    "snoring"
+  ],
+  "class_to_index": {
+    "not_snoring": 0,
+    "snoring": 1
+  }
+}
