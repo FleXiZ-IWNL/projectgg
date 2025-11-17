@@ -601,7 +601,12 @@ class ModelHandler:
                             
                             # Read the model config and fix batch_shape
                             with h5py.File(self.config.MODEL_PATH, 'r') as f:
-                                model_config = json.loads(f.attrs.get('model_config', '{}').decode('utf-8'))
+                                model_config_str = f.attrs.get('model_config', b'{}')
+                                # Handle both bytes and string
+                                if isinstance(model_config_str, bytes):
+                                    model_config = json.loads(model_config_str.decode('utf-8'))
+                                else:
+                                    model_config = json.loads(str(model_config_str))
                                 
                                 # Recursively fix batch_shape in config
                                 def fix_batch_shape(obj):
@@ -629,6 +634,8 @@ class ModelHandler:
                                 self.model.load_weights(self.config.MODEL_PATH)
                         except Exception as e3:
                             logger.error(f"All model loading methods failed. Last error: {e3}")
+                            # Set model to None so app can continue
+                            self.model = None
                             raise e3
                 else:
                     raise

@@ -79,6 +79,9 @@ class DatabaseManager:
             self._init_sqlite()
         
         logger.info(f"Database initialized: {self.db_type}")
+        
+        # Automatically create tables if they don't exist
+        self._create_tables_if_not_exist()
     
     def _init_postgresql(self):
         """Initialize PostgreSQL connection pool"""
@@ -798,6 +801,172 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error getting system logs: {str(e)}")
             return []
+    
+    def _create_tables_if_not_exist(self):
+        """Create database tables if they don't exist"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                if self.db_type == 'postgresql':
+                    # Users table
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS users (
+                            user_id SERIAL PRIMARY KEY,
+                            username VARCHAR(50) UNIQUE NOT NULL,
+                            email VARCHAR(100) UNIQUE NOT NULL,
+                            password_hash TEXT NOT NULL,
+                            password_salt TEXT NOT NULL,
+                            full_name VARCHAR(100),
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            last_login TIMESTAMP,
+                            is_active INTEGER DEFAULT 1,
+                            profile_image TEXT
+                        )
+                    """)
+                    
+                    # Sessions table
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS sessions (
+                            session_id VARCHAR(255) PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            expires_at TIMESTAMP NOT NULL,
+                            ip_address VARCHAR(45),
+                            user_agent TEXT,
+                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                        )
+                    """)
+                    
+                    # Detection history table
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS detection_history (
+                            detection_id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
+                            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            class_name VARCHAR(50) NOT NULL,
+                            confidence REAL NOT NULL,
+                            model_type VARCHAR(50),
+                            audio_file TEXT,
+                            pump_activated INTEGER DEFAULT 0,
+                            notes TEXT,
+                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                        )
+                    """)
+                    
+                    # User settings table
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS user_settings (
+                            setting_id SERIAL PRIMARY KEY,
+                            user_id INTEGER UNIQUE NOT NULL,
+                            auto_detect_enabled INTEGER DEFAULT 0,
+                            detection_delay INTEGER DEFAULT 5,
+                            confidence_threshold REAL DEFAULT 0.85,
+                            notification_enabled INTEGER DEFAULT 1,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                        )
+                    """)
+                    
+                    # System logs table
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS system_logs (
+                            log_id SERIAL PRIMARY KEY,
+                            user_id INTEGER,
+                            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            log_level VARCHAR(20) NOT NULL,
+                            message TEXT NOT NULL,
+                            context TEXT,
+                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
+                        )
+                    """)
+                    
+                    # Create indexes
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_detection_history_user_id ON detection_history(user_id)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_detection_history_timestamp ON detection_history(timestamp)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_logs_user_id ON system_logs(user_id)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_logs_timestamp ON system_logs(timestamp)")
+                    
+                else:
+                    # SQLite tables
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS users (
+                            user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            username TEXT UNIQUE NOT NULL,
+                            email TEXT UNIQUE NOT NULL,
+                            password_hash TEXT NOT NULL,
+                            password_salt TEXT NOT NULL,
+                            full_name TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            last_login TIMESTAMP,
+                            is_active INTEGER DEFAULT 1,
+                            profile_image TEXT
+                        )
+                    """)
+                    
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS sessions (
+                            session_id TEXT PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            expires_at TIMESTAMP NOT NULL,
+                            ip_address TEXT,
+                            user_agent TEXT,
+                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                        )
+                    """)
+                    
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS detection_history (
+                            detection_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL,
+                            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            class_name TEXT NOT NULL,
+                            confidence REAL NOT NULL,
+                            model_type TEXT,
+                            audio_file TEXT,
+                            pump_activated INTEGER DEFAULT 0,
+                            notes TEXT,
+                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                        )
+                    """)
+                    
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS user_settings (
+                            setting_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER UNIQUE NOT NULL,
+                            auto_detect_enabled INTEGER DEFAULT 0,
+                            detection_delay INTEGER DEFAULT 5,
+                            confidence_threshold REAL DEFAULT 0.85,
+                            notification_enabled INTEGER DEFAULT 1,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                        )
+                    """)
+                    
+                    cursor.execute("""
+                        CREATE TABLE IF NOT EXISTS system_logs (
+                            log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER,
+                            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            log_level TEXT NOT NULL,
+                            message TEXT NOT NULL,
+                            context TEXT,
+                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
+                        )
+                    """)
+                
+                conn.commit()
+                logger.info("Database tables created/verified successfully")
+                
+        except Exception as e:
+            logger.error(f"Error creating database tables: {str(e)}")
+            # Don't raise - allow app to continue (tables might already exist)
+            logger.warning("Continuing without table creation - tables may already exist")
     
     def close(self):
         """Close database connections"""
