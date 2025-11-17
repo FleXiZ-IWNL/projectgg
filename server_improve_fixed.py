@@ -669,6 +669,7 @@ class ModelHandler:
                                                         build_input_shape[0] = [None, 216, 128]  # Default based on error message
                                         
                                         # Fix DTypePolicy - convert to string (in ALL layers and nested configs)
+                                        # This must be done BEFORE fixing nested configs to catch all instances
                                         if 'dtype' in obj and obj['dtype'] is not None:
                                             dtype_val = obj['dtype']
                                             if isinstance(dtype_val, dict):
@@ -685,7 +686,23 @@ class ModelHandler:
                                                     logger.debug(f"Fixed DTypePolicy at {path} -> {dtype_name}")
                                         
                                         # Fix nested config objects (CRITICAL - layers have config inside)
+                                        # Must fix config AFTER fixing dtype at this level
                                         if 'config' in obj and isinstance(obj['config'], dict):
+                                            # Fix DTypePolicy in config first
+                                            config = obj['config']
+                                            if 'dtype' in config and config['dtype'] is not None:
+                                                dtype_val = config['dtype']
+                                                if isinstance(dtype_val, dict):
+                                                    dtype_obj = dtype_val
+                                                    if dtype_obj.get('class_name') == 'DTypePolicy':
+                                                        dtype_config = dtype_obj.get('config', {})
+                                                        if isinstance(dtype_config, dict):
+                                                            dtype_name = dtype_config.get('name', 'float32')
+                                                        else:
+                                                            dtype_name = 'float32'
+                                                        config['dtype'] = dtype_name
+                                                        logger.debug(f"Fixed DTypePolicy in config at {path} -> {dtype_name}")
+                                            # Then recursively fix nested configs
                                             fix_config(obj['config'], f"{path}.config")
                                         
                                         # Recursively fix all nested objects
