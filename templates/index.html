@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="ระบบตรวจจับเสียงกรนอัจฉริยะด้วย AI และควบคุมหมอนอัตโนมัติ">
+    <meta name="keywords" content="หมอน, นอนกรน, AI, ตรวจจับเสียง, สุขภาพ">
+    <meta name="author" content="Smart Pillow System">
+    
+    <!-- Open Graph tags -->
+    <meta property="og:title" content="หมอนลดการนอนกรนอัจฉริยะ">
+    <meta property="og:description" content="ระบบตรวจจับเสียงกรนด้วย AI และควบคุมระดับหมอนอัตโนมัติ">
+    <meta property="og:type" content="website">
+    
+    <!-- Security -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="X-XSS-Protection" content="1; mode=block">
+    
+    <title>หมอนลดการนอนกรนอัจฉริยะ</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Loading overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <p>กำลังโหลดระบบ...</p>
+    </div>
+    
+    <!-- Error notification -->
+    <div id="error-notification" class="notification error hidden">
+        <span id="error-message"></span>
+        <button onclick="hideNotification('error-notification')" aria-label="ปิดการแจ้งเตือน">&times;</button>
+    </div>
+    
+    <!-- Success notification -->
+    <div id="success-notification" class="notification success hidden">
+        <span id="success-message"></span>
+        <button onclick="hideNotification('success-notification')" aria-label="ปิดการแจ้งเตือน">&times;</button>
+    </div>
+
+    <div class="container">
+        <header>
+            <h1>
+                <span class="icon"></span>
+                หมอนลดการนอนกรนอัจฉริยะ
+            </h1>
+            <p class="subtitle">ระบบตรวจจับเสียงกรนด้วย AI และควบคุมระดับหมอนอัตโนมัติ</p>
+        </header>
+
+        <!-- System Status Dashboard -->
+        <section class="status-dashboard" aria-label="แดชบอร์ดสถานะระบบ">
+            <div class="status-container">
+                <div class="status-card recording-status" id="recording-card">
+                    <div class="status-icon"></div>
+                    <h3>การอัดเสียง</h3>
+                    <p id="recording-status" class="status-text">พร้อมใช้งาน</p>
+                    <div class="status-indicator" id="recording-indicator"></div>
+                </div>
+                
+                <div class="status-card detection-status" id="detection-card">
+                    <div class="status-icon"></div>
+                    <h3>การตรวจจับ AI</h3>
+                    <p id="detection-result" class="status-text">ยังไม่มีข้อมูล</p>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" id="confidence-fill"></div>
+                    </div>
+                </div>
+                
+                <div class="status-card pump-status" id="pump-card">
+                    <div class="status-icon"></div>
+                    <h3>ปั๊มลม</h3>
+                    <p id="pump-status" class="status-text">ปิด</p>
+                    <div class="status-indicator" id="pump-indicator"></div>
+                </div>
+                
+                <div class="status-card system-status" id="system-card">
+                    <div class="status-icon"></div>
+                    <h3>ระบบ</h3>
+                    <p id="system-status" class="status-text">กำลังตรวจสอบ...</p>
+                    <div class="system-indicators">
+                        <span class="mini-indicator" id="model-mini-indicator" title="AI Model"></span>
+                        <span class="mini-indicator" id="gpio-mini-indicator" title="GPIO"></span>
+                        <span class="mini-indicator" id="connection-mini-indicator" title="Connection"></span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <div class="control-panel">
+            <!-- Auto Detection Control -->
+            <section class="card auto-detection-card" aria-label="การควบคุมการตรวจจับอัตโนมัติ">
+                <div class="card-header">
+                    <h2>การตรวจจับเสียงกรนอัตโนมัติ</h2>
+                    <div class="card-status" id="auto-detect-card-status">ปิด</div>
+                </div>
+                
+                <div class="auto-detect-container">
+                    <div class="switch-container">
+                        <label class="switch" for="auto-detect-toggle">
+                            <input type="checkbox" id="auto-detect-toggle" aria-describedby="auto-detect-description">
+                            <span class="slider round"></span>
+                        </label>
+                        <div class="switch-labels">
+                            <span id="auto-detect-status" class="switch-status">ปิด</span>
+                            <p id="auto-detect-description" class="desc-text">
+                                เมื่อเปิดใช้งาน ระบบจะตรวจจับเสียงกรนและควบคุมปั๊มลมตามความถี่ที่ตั้งค่าไว้
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="delay-control">
+                        <h3>ตั้งค่าความถี่ในการตรวจจับ</h3>
+                        <div class="slider-container">
+                            <label for="delay-slider">
+                                ตรวจจับทุกๆ: <span id="delay-value" class="value-display">5</span> นาที
+                            </label>
+                            <input 
+                                type="range" 
+                                min="1" 
+                                max="60" 
+                                value="5" 
+                                class="range-slider" 
+                                id="delay-slider"
+                                aria-describedby="delay-description"
+                            >
+                            <div class="range-labels">
+                                <span>1 นาที</span>
+                                <span>60 นาที</span>
+                            </div>
+                            <p id="delay-description" class="desc-text">
+                                หลังตรวจพบเสียงกรน ระบบจะหยุดการตรวจจับชั่วคราวตามระยะเวลาที่กำหนด
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Manual Recording -->
+            <section class="card manual-control-card" aria-label="การควบคุมด้วยตนเอง">
+                <div class="card-header">
+                    <h2>การควบคุมด้วยตนเอง</h2>
+                </div>
+                
+                <div class="manual-controls">
+                    <button 
+                        id="manual-record-btn" 
+                        class="control-btn record-btn"
+                        aria-describedby="manual-record-description"
+                    >
+                        <span class="btn-icon"></span>
+                        บันทึกและตรวจจับเสียงกรน
+                    </button>
+                    <p id="manual-record-description" class="desc-text">
+                        บันทึกเสียง 5 วินาทีและใช้ AI วิเคราะห์ว่าเป็นเสียงกรนหรือไม่
+                    </p>
+                </div>
+            </section>
+
+            <!-- Pillow Control -->
+            <section class="card pillow-control-card" aria-label="การควบคุมระดับหมอน">
+                <div class="card-header">
+                    <h2>ปรับระดับหมอน</h2>
+                    <div class="pillow-status-indicator" id="pillow-action-indicator"></div>
+                </div>
+                
+                <p class="pillow-description">
+                    เลือกระดับความสูงของหมอนที่ต้องการ (ตัวเลขในวงเล็บคือระยะเวลาที่ปั๊มลมทำงาน)
+                </p>
+                
+                <div class="pillow-control-grid">
+                    <button 
+                        id="level-1-btn" 
+                        class="pillow-btn level-1"
+                        aria-label="ปรับระดับหมอนเป็นระดับ 1"
+                        data-level="1"
+                    >
+                        <span class="level-number">1</span>
+                        <span class="level-name">ต่ำ</span>
+                        <small>(35 วินาที)</small>
+                    </button>
+                    
+                    <button 
+                        id="level-2-btn" 
+                        class="pillow-btn level-2"
+                        aria-label="ปรับระดับหมอนเป็นระดับ 2"
+                        data-level="2"
+                    >
+                        <span class="level-number">2</span>
+                        <span class="level-name">กลาง</span>
+                        <small>(50 วินาที)</small>
+                    </button>
+                    
+                    <button 
+                        id="level-3-btn" 
+                        class="pillow-btn level-3"
+                        aria-label="ปรับระดับหมอนเป็นระดับ 3"
+                        data-level="3"
+                    >
+                        <span class="level-number">3</span>
+                        <span class="level-name">สูง</span>
+                        <small>(70 วินาที)</small>
+                    </button>
+                    
+                    <button 
+                        id="deflate-btn" 
+                        class="pillow-btn deflate"
+                        aria-label="ดูดลมออกจากหมอนทั้งหมด"
+                    >
+                        <span class="level-number">0</span>
+                        <span class="level-name">ว่าง</span>
+                        <small>(30 วินาที)</small>
+                    </button>
+                </div>
+                
+                <div class="pillow-notes">
+                    <p class="note-item">
+                        <span class="note-icon">ℹ️</span>
+                        <strong>หมายเหตุ:</strong> ทุกการปรับระดับ (1, 2, 3) จะมีการปล่อยลมก่อนเป็นเวลา 20 วินาที
+                    </p>
+                    <div id="pillow-status" class="pillow-status-text"></div>
+                </div>
+            </section>
+
+            <!-- Audio Visualization -->
+            <section class="card visualization-card" aria-label="การแสดงผลเสียง">
+                <div class="card-header">
+                    <h2>การแสดงผลเสียง</h2>
+                    <div class="visualization-controls">
+                        <button id="viz-play-btn" class="mini-btn" aria-label="เล่น/หยุดการแสดงผล"></button>
+                    </div>
+                </div>
+                <canvas id="visualizer" aria-label="การแสดงผลรูปคลื่นเสียง"></canvas>
+            </section>
+
+            <!-- Detection Chart -->
+            <section class="card chart-card" aria-label="กราฟความมั่นใจในการตรวจจับ">
+                <div class="card-header">
+                    <h2>กราฟความมั่นใจในการตรวจจับ</h2>
+                    <div class="chart-controls">
+                        <button id="chart-reset-btn" class="mini-btn" aria-label="รีเซ็ตกราฟ"></button>
+                        <button id="chart-export-btn" class="mini-btn" aria-label="ส่งออกข้อมูล"></button>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="detection-chart" aria-label="กราฟแสดงความมั่นใจในการตรวจจับเสียงกรน"></canvas>
+                </div>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <span class="legend-color snore-color"></span>
+                        <span>เสียงกรน (≥75%)</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color normal-color"></span>
+                        <span>เสียงปกติ (<75%)</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Detection History -->
+            <section class="card history-card" aria-label="ประวัติการตรวจจับ">
+                <div class="card-header">
+                    <h2>ประวัติการตรวจจับ</h2>
+                    <div class="history-controls">
+                        <button id="history-clear-btn" class="mini-btn" aria-label="ล้างประวัติ"></button>
+                        <button id="history-export-btn" class="mini-btn" aria-label="ส่งออกประวัติ"></button>
+                    </div>
+                </div>
+                
+                <div class="table-container">
+                    <table id="records-table" class="data-table">
+                        <thead>
+                            <tr>
+                                <th>วันเวลา</th>
+                                <th>ผลการตรวจจับ</th>
+                                <th>ความมั่นใจ (%)</th>
+                                <th>การทำงานของปั๊ม</th>
+                                <th>ไฟล์เสียง</th>
+                            </tr>
+                        </thead>
+                        <tbody id="records-body">
+                            <tr class="no-data">
+                                <td colspan="5">ยังไม่มีข้อมูลการตรวจจับ</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Activity Log -->
+            <section class="card log-card" aria-label="บันทึกการทำงานของระบบ">
+                <div class="card-header">
+                    <h2>บันทึกการทำงานของระบบ</h2>
+                    <div class="log-controls">
+                        <button id="log-pause-btn" class="mini-btn" aria-label="หยุด/เริ่มการอัปเดตล็อก"></button>
+                        <button id="log-clear-btn" class="mini-btn" aria-label="ล้างล็อก"></button>
+                        <button id="log-download-btn" class="mini-btn" aria-label="ดาวน์โหลดล็อก"></button>
+                    </div>
+                </div>
+                
+                <div class="log-container" id="log-container">
+                    <div class="log-entry system">
+                        <span class="timestamp">[กำลังโหลด...]</span>
+                        <span class="message">กำลังเชื่อมต่อกับระบบ...</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- System Information -->
+            <section class="card system-info-card" aria-label="ข้อมูลระบบ">
+                <div class="card-header">
+                    <h2>สถานะระบบ</h2>
+                    <div class="refresh-indicator" id="refresh-indicator"></div>
+                </div>
+                
+                <div class="system-info">
+                    <div class="info-group">
+                        <h4>สถานะส่วนประกอบ</h4>
+                        <div class="info-item">
+                            <span class="indicator" id="model-indicator"></span>
+                            <span class="label">โมเดล AI:</span>
+                            <span class="value" id="model-status">กำลังตรวจสอบ...</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="indicator" id="gpio-indicator"></span>
+                            <span class="label">GPIO:</span>
+                            <span class="value" id="gpio-status">กำลังตรวจสอบ...</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="indicator" id="connection-indicator"></span>
+                            <span class="label">การเชื่อมต่อ:</span>
+                            <span class="value" id="connection-status">กำลังตรวจสอบ...</span>
+                        </div>
+                    </div>
+                    
+                    <div class="info-group">
+                        <h4>ข้อมูลระบบ</h4>
+                        <div class="info-item">
+                            <span class="label">เวลาปัจจุบัน:</span>
+                            <span class="value" id="server-time">กำลังโหลด...</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">เวอร์ชัน:</span>
+                            <span class="value">v2.0 (Improved)</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">AI Model:</span>
+                            <span class="value" id="model-name">CNN-Based Audio Classifier</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script type="module" src="/static/js/script.js"></script>
+    
+    <!-- Service Worker Registration -->
+    <script>
+        // ตรวจสอบว่ามี service worker หรือไม่ก่อนที่จะ register
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                // ตรวจสอบว่าไฟล์ sw.js มีอยู่จริงหรือไม่
+                fetch('/static/sw.js')
+                    .then(response => {
+                        if (response.ok) {
+                            return navigator.serviceWorker.register('/static/sw.js');
+                        } else {
+                            console.log('Service Worker file not found, skipping registration');
+                            return null;
+                        }
+                    })
+                    .then(function(registration) {
+                        if (registration) {
+                            console.log('ServiceWorker registered successfully');
+                        }
+                    })
+                    .catch(function(registrationError) {
+                        console.log('ServiceWorker registration failed:', registrationError);
+                    });
+            });
+        }
+    </script>
+</body>
+</html>
