@@ -637,11 +637,36 @@ class ModelHandler:
                                                 # Convert batch_shape to input_shape
                                                 batch_shape = obj.pop('batch_shape')
                                                 if batch_shape and len(batch_shape) > 1:
-                                                    obj['input_shape'] = batch_shape[1:]
-                                                    logger.debug(f"Fixed batch_shape at {path}")
+                                                    input_shape = batch_shape[1:]  # Remove batch dimension
+                                                    obj['input_shape'] = input_shape
+                                                    logger.debug(f"Fixed batch_shape at {path}: {batch_shape} -> {input_shape}")
                                             else:
                                                 # Remove batch_shape from other layers too
                                                 obj.pop('batch_shape', None)
+                                        
+                                        # Fix build_input_shape - CRITICAL for model loading
+                                        if 'build_input_shape' in obj:
+                                            build_input_shape = obj['build_input_shape']
+                                            if isinstance(build_input_shape, list) and len(build_input_shape) > 0:
+                                                if build_input_shape[0] is None:
+                                                    # Try to get input_shape from first layer
+                                                    logger.debug(f"Fixing build_input_shape at {path}: {build_input_shape}")
+                                                    # If we have layers, get input_shape from first InputLayer
+                                                    if 'layers' in obj and isinstance(obj['layers'], list):
+                                                        for layer in obj['layers']:
+                                                            if isinstance(layer, dict):
+                                                                layer_config = layer.get('config', {})
+                                                                if layer_config.get('class_name') == 'InputLayer':
+                                                                    input_shape = layer_config.get('input_shape')
+                                                                    if input_shape:
+                                                                        # Reconstruct build_input_shape with batch dimension
+                                                                        build_input_shape[0] = [None] + list(input_shape) if isinstance(input_shape, (list, tuple)) else [None, input_shape]
+                                                                        logger.debug(f"Fixed build_input_shape from InputLayer: {build_input_shape}")
+                                                                        break
+                                                    # If still None, set to a default
+                                                    if build_input_shape[0] is None:
+                                                        logger.warning(f"Could not determine build_input_shape, using default")
+                                                        build_input_shape[0] = [None, 216, 128]  # Default based on error message
                                         
                                         # Fix DTypePolicy - convert to string (in ALL layers and nested configs)
                                         if 'dtype' in obj and obj['dtype'] is not None:
@@ -672,7 +697,49 @@ class ModelHandler:
                                             fix_config(item, f"{path}[{i}]")
                                 
                                 logger.info("Fixing model config for compatibility...")
+                                
+                                # First pass: Fix batch_shape to get input_shape
                                 fix_config(model_config)
+                                
+                                # Second pass: Fix build_input_shape using the input_shape we found
+                                def fix_build_input_shape(obj):
+                                    """Fix build_input_shape after input_shape is fixed"""
+                                    if isinstance(obj, dict):
+                                        if 'build_input_shape' in obj:
+                                            build_input_shape = obj['build_input_shape']
+                                            if isinstance(build_input_shape, list) and len(build_input_shape) > 0:
+                                                if build_input_shape[0] is None:
+                                                    # Try to get from layers
+                                                    if 'layers' in obj and isinstance(obj['layers'], list):
+                                                        for layer in obj['layers']:
+                                                            if isinstance(layer, dict):
+                                                                layer_config = layer.get('config', {})
+                                                                if layer_config.get('class_name') == 'InputLayer':
+                                                                    input_shape = layer_config.get('input_shape')
+                                                                    if input_shape:
+                                                                        # Convert to build_input_shape format [batch, ...]
+                                                                        if isinstance(input_shape, (list, tuple)):
+                                                                            build_input_shape[0] = [None] + list(input_shape)
+                                                                        else:
+                                                                            build_input_shape[0] = [None, input_shape]
+                                                                        logger.info(f"Fixed build_input_shape: {build_input_shape[0]}")
+                                                                        break
+                                                    # Fallback to default
+                                                    if build_input_shape[0] is None:
+                                                        build_input_shape[0] = [None, 216, 128]
+                                                        logger.warning(f"Using default build_input_shape: {build_input_shape[0]}")
+                                        
+                                        # Recursively check nested objects
+                                        for v in obj.values():
+                                            if isinstance(v, (dict, list)):
+                                                fix_build_input_shape(v)
+                                    elif isinstance(obj, list):
+                                        for item in obj:
+                                            fix_build_input_shape(item)
+                                
+                                # Second pass to fix build_input_shape
+                                fix_build_input_shape(model_config)
+                                
                                 logger.info("Model config fixed successfully")
                                 
                                 # Validate model_config before proceeding
