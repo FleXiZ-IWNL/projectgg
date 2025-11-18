@@ -486,24 +486,80 @@ class AudioProcessor:
                 self.data_store.update_status(is_recording=False)
     
     def save_uploaded_audio(self, audio_file) -> Optional[str]:
-        """Save uploaded audio file from client."""
+        """Save uploaded audio file from client and convert to WAV if needed."""
         try:
             # Generate unique filename
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"recording_{timestamp}.wav"
-            filepath = os.path.join(self.config.STATIC_FOLDER, filename)
+            
+            # Get original filename and extension
+            original_filename = audio_file.filename
+            original_ext = os.path.splitext(original_filename)[1].lower() if original_filename else ''
+            
+            # Save uploaded file temporarily
+            temp_filename = f"temp_{timestamp}{original_ext}"
+            temp_filepath = os.path.join(self.config.STATIC_FOLDER, temp_filename)
             
             # Ensure directory exists
             os.makedirs(self.config.STATIC_FOLDER, exist_ok=True)
             
             # Save uploaded file
-            audio_file.save(filepath)
+            audio_file.save(temp_filepath)
+            logger.info(f"📁 Temporary file saved: {temp_filepath}")
+            
+            # Convert to WAV if needed (webm, ogg, mp3 need conversion)
+            if original_ext in ['.webm', '.ogg', '.mp3']:
+                logger.info(f"🔄 Converting {original_ext} to WAV...")
+                try:
+                    # Load audio using librosa (handles most formats)
+                    audio_data, sr = librosa.load(temp_filepath, sr=self.config.SAMPLE_RATE)
+                    
+                    # Save as WAV
+                    wav_filename = f"recording_{timestamp}.wav"
+                    wav_filepath = os.path.join(self.config.STATIC_FOLDER, wav_filename)
+                    sf.write(wav_filepath, audio_data, sr)
+                    
+                    # Remove temporary file
+                    try:
+                        os.remove(temp_filepath)
+                    except:
+                        pass
+                    
+                    filepath = wav_filepath
+                    filename = wav_filename
+                    logger.info(f"✅ Converted to WAV: {wav_filepath}")
+                except Exception as conv_error:
+                    logger.warning(f"⚠️ Conversion failed: {conv_error}, trying to use original file")
+                    # If conversion fails, try to use original file
+                    wav_filename = f"recording_{timestamp}.wav"
+                    wav_filepath = os.path.join(self.config.STATIC_FOLDER, wav_filename)
+                    try:
+                        # Try to load and save again
+                        audio_data, sr = librosa.load(temp_filepath, sr=None)
+                        sf.write(wav_filepath, audio_data, sr)
+                        os.remove(temp_filepath)
+                        filepath = wav_filepath
+                        filename = wav_filename
+                    except:
+                        # Last resort: rename original file
+                        filepath = temp_filepath
+                        filename = temp_filename
+            else:
+                # Already WAV or other supported format, just rename
+                wav_filename = f"recording_{timestamp}.wav"
+                wav_filepath = os.path.join(self.config.STATIC_FOLDER, wav_filename)
+                if temp_filepath != wav_filepath:
+                    os.rename(temp_filepath, wav_filepath)
+                    filepath = wav_filepath
+                    filename = wav_filename
+                else:
+                    filepath = temp_filepath
+                    filename = temp_filename
             
             # Verify file was saved
             if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                 file_size = os.path.getsize(filepath)
                 self.data_store.add_log_entry(f"✅ Audio uploaded and saved: {filename} ({file_size} bytes)")
-                logger.info(f"Audio file saved: {filepath}, size: {file_size} bytes")
+                logger.info(f"✅ Audio file saved: {filepath}, size: {file_size} bytes")
                 return filepath
             else:
                 raise AudioProcessingError("Failed to save uploaded audio file")
@@ -512,6 +568,8 @@ class AudioProcessor:
             error_msg = f"❌ Failed to save uploaded audio: {str(e)}"
             self.data_store.add_log_entry(error_msg)
             logger.error(error_msg)
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise AudioProcessingError(error_msg)
     
     def cleanup_old_files(self):
@@ -1690,20 +1748,27 @@ def create_app():
         """Receive audio file from client and process it."""
         user = request.current_user
         try:
+            logger.info("📤 Audio upload request received")
             status = snore_system.data_store.get_status()
             if status.get('snoring_response_active', False):
+                logger.warning("⚠️ Snoring response sequence in progress, skipping audio upload")
                 return jsonify({"success": False, "message": "Snoring response sequence in progress"})
             
             # Check if audio file is in request
             if 'audio' not in request.files:
+                logger.warning("⚠️ No audio file in request")
                 return jsonify({"success": False, "message": "No audio file provided"}), 400
             
             audio_file = request.files['audio']
             if audio_file.filename == '':
+                logger.warning("⚠️ Empty audio filename")
                 return jsonify({"success": False, "message": "No audio file selected"}), 400
+            
+            logger.info(f"📁 Received audio file: {audio_file.filename}, size: {audio_file.content_length} bytes")
             
             # Validate file extension
             if not audio_file.filename.lower().endswith(('.wav', '.mp3', '.ogg', '.webm')):
+                logger.warning(f"⚠️ Invalid audio format: {audio_file.filename}")
                 return jsonify({"success": False, "message": "Invalid audio format. Please use WAV, MP3, OGG, or WebM"}), 400
             
             # Save uploaded audio file
@@ -1712,13 +1777,18 @@ def create_app():
             
             if not audio_path:
                 snore_system.data_store.update_status(is_recording=False)
+                logger.error("❌ Failed to save audio file")
                 return jsonify({"success": False, "message": "Failed to save audio file"}), 500
+            
+            logger.info(f"💾 Audio file saved: {audio_path}")
             
             # Process audio in background thread
             def process_task():
                 try:
+                    logger.info(f"🔍 Starting prediction for: {audio_path}")
                     result = snore_system.model_handler.predict(audio_path)
                     if result:
+                        logger.info(f"✅ Prediction successful: {result['class_name']} ({result['confidence']:.2f}%)")
                         # Add to history
                         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         history_entry = {
@@ -1737,25 +1807,37 @@ def create_app():
                         is_snoring = result["class_name"] in ["กรน", "snoring", "Snoring", "SNORING"]
                         confidence_above_threshold = result["confidence"] > snore_system.config.CONFIDENCE_THRESHOLD * 100
                         
+                        logger.info(f"🔍 Checking snoring response: is_snoring={is_snoring}, confidence_above_threshold={confidence_above_threshold} (threshold={snore_system.config.CONFIDENCE_THRESHOLD * 100}%)")
+                        
                         if is_snoring and confidence_above_threshold:
                             status = snore_system.data_store.get_status()
                             if not status.get('snoring_response_active', False):
                                 snore_system.data_store.add_log_entry(
                                     f"🚨 TRIGGERING SNORING RESPONSE: '{result['class_name']}' detected with {result['confidence']:.2f}% confidence"
                                 )
+                                logger.info("🚨 Starting snoring response sequence")
                                 response_thread = Thread(target=snore_system._execute_snoring_response, daemon=True)
                                 response_thread.start()
+                            else:
+                                logger.info("⚠️ Snoring response already active, skipping")
+                        else:
+                            logger.info(f"ℹ️ No snoring response triggered: is_snoring={is_snoring}, confidence={result['confidence']:.2f}%")
                         
                         # Cleanup old files
                         snore_system.audio_processor.cleanup_old_files()
                         
-                        logger.info(f"Audio processing completed: {result}")
+                        logger.info(f"✅ Audio processing completed: {result}")
                     else:
-                        logger.error("Audio processing failed")
+                        logger.error("❌ Audio processing failed: predict() returned None")
+                        snore_system.data_store.add_log_entry("❌ Prediction failed: No result returned")
                 except Exception as e:
-                    logger.error(f"Error processing audio: {str(e)}")
+                    logger.error(f"❌ Error processing audio: {str(e)}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    snore_system.data_store.add_log_entry(f"❌ Prediction error: {str(e)}")
                 finally:
                     snore_system.data_store.update_status(is_recording=False)
+                    logger.info("🏁 Audio processing task completed")
             
             Thread(target=process_task, daemon=True).start()
             
