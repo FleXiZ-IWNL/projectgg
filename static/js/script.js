@@ -1123,6 +1123,102 @@ class SnorePillowSystem {
     }
     
     /**
+     * Convert audio blob to WAV format using Web Audio API
+     */
+    async convertToWAV(audioBlob, originalMimeType) {
+        return new Promise((resolve, reject) => {
+            try {
+                // Create audio context
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Create file reader
+                const fileReader = new FileReader();
+                
+                fileReader.onload = async (e) => {
+                    try {
+                        // Decode audio data
+                        const audioBuffer = await audioContext.decodeAudioData(e.target.result);
+                        
+                        // Convert to WAV
+                        const wav = this.audioBufferToWav(audioBuffer);
+                        const wavBlob = new Blob([wav], { type: 'audio/wav' });
+                        
+                        resolve(wavBlob);
+                    } catch (error) {
+                        reject(error);
+                    } finally {
+                        audioContext.close();
+                    }
+                };
+                
+                fileReader.onerror = (error) => {
+                    reject(error);
+                };
+                
+                // Read audio blob as array buffer
+                fileReader.readAsArrayBuffer(audioBlob);
+            } catch (error) {
+                reject(error);
+            }
+        });
+    }
+    
+    /**
+     * Convert AudioBuffer to WAV format
+     */
+    audioBufferToWav(buffer) {
+        const length = buffer.length;
+        const numberOfChannels = buffer.numberOfChannels;
+        const sampleRate = buffer.sampleRate;
+        const bytesPerSample = 2; // 16-bit
+        const blockAlign = numberOfChannels * bytesPerSample;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = length * blockAlign;
+        const bufferSize = 44 + dataSize;
+        
+        const arrayBuffer = new ArrayBuffer(bufferSize);
+        const view = new DataView(arrayBuffer);
+        
+        // WAV header
+        const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+        
+        writeString(0, 'RIFF');
+        view.setUint32(4, bufferSize - 8, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true); // fmt chunk size
+        view.setUint16(20, 1, true); // audio format (PCM)
+        view.setUint16(22, numberOfChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, byteRate, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bytesPerSample * 8, true); // bits per sample
+        writeString(36, 'data');
+        view.setUint32(40, dataSize, true);
+        
+        // Convert float32 to int16
+        let offset = 44;
+        const channelData = [];
+        for (let channel = 0; channel < numberOfChannels; channel++) {
+            channelData.push(buffer.getChannelData(channel));
+        }
+        
+        for (let i = 0; i < length; i++) {
+            for (let channel = 0; channel < numberOfChannels; channel++) {
+                const sample = Math.max(-1, Math.min(1, channelData[channel][i]));
+                view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+                offset += 2;
+            }
+        }
+        
+        return arrayBuffer;
+    }
+    
+    /**
      * Record and upload audio for auto detection
      */
     async recordAndUploadForAutoDetection() {
@@ -1144,25 +1240,47 @@ class SnorePillowSystem {
                 
                 const audioChunks = [];
                 
+                // Limit recording duration to 10 seconds for auto detection
+                const MAX_RECORDING_DURATION = 10000; // 10 seconds in milliseconds
+                let recordingStartTime = Date.now();
+                
                 mediaRecorder.ondataavailable = (event) => {
                     if (event.data.size > 0) {
                         audioChunks.push(event.data);
+                    }
+                    
+                    // Auto-stop after max duration
+                    if (Date.now() - recordingStartTime >= MAX_RECORDING_DURATION) {
+                        if (mediaRecorder.state === 'recording') {
+                            mediaRecorder.stop();
+                        }
                     }
                 };
                 
                 mediaRecorder.onstop = async () => {
                     try {
-                        // Create audio blob
+                        // Create audio blob from chunks
                         const audioBlob = new Blob(audioChunks, { type: mimeType });
+                        
+                        // Convert to WAV format using Web Audio API
+                        let wavBlob;
+                        try {
+                            wavBlob = await this.convertToWAV(audioBlob, mimeType);
+                            console.log('✅ Converted to WAV format');
+                        } catch (convertError) {
+                            console.warn('⚠️ WAV conversion failed, using original format:', convertError);
+                            wavBlob = audioBlob; // Fallback to original format
+                        }
                         
                         // Create form data
                         const formData = new FormData();
-                        const filename = `auto_recording_${Date.now()}.${mimeType.split('/')[1]}`;
-                        formData.append('audio', audioBlob, filename);
+                        const filename = `auto_recording_${Date.now()}.wav`;
+                        formData.append('audio', wavBlob, filename);
                         
                         // Upload to server with timeout
+                        // Increased timeout to 60 seconds to allow for audio conversion
                         const controller = new AbortController();
-                        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 seconds timeout
+                        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 seconds timeout
                         
                         try {
                             const response = await fetch('/api/upload_audio', {
@@ -1231,8 +1349,8 @@ class SnorePillowSystem {
                         } catch (fetchError) {
                             clearTimeout(timeoutId);
                             if (fetchError.name === 'AbortError') {
-                                console.error('Upload timeout after 30 seconds');
-                                reject(new Error('Upload timeout - server took too long to respond'));
+                                console.error('Upload timeout after 60 seconds');
+                                reject(new Error('Upload timeout - server took too long to respond. Please try again.'));
                             } else {
                                 console.error('Upload error:', fetchError);
                                 reject(fetchError);
@@ -1247,15 +1365,16 @@ class SnorePillowSystem {
                     reject(new Error('MediaRecorder error: ' + event.error));
                 };
                 
-                // Start recording (5 seconds)
+                // Start recording (limited to MAX_RECORDING_DURATION)
+                recordingStartTime = Date.now();
                 mediaRecorder.start();
                 
-                // Stop recording after 5 seconds
+                // Stop recording after max duration (10 seconds)
                 setTimeout(() => {
                     if (mediaRecorder.state !== 'inactive') {
                         mediaRecorder.stop();
                     }
-                }, 5000);
+                }, MAX_RECORDING_DURATION);
                 
             } catch (error) {
                 reject(error);
@@ -1355,10 +1474,20 @@ class SnorePillowSystem {
                     // Create audio blob
                     const audioBlob = new Blob(this.audioChunks, { type: mimeType });
                     
+                    // Convert to WAV format using Web Audio API
+                    let wavBlob;
+                    try {
+                        wavBlob = await this.convertToWAV(audioBlob, mimeType);
+                        console.log('✅ Converted to WAV format');
+                    } catch (convertError) {
+                        console.warn('⚠️ WAV conversion failed, using original format:', convertError);
+                        wavBlob = audioBlob; // Fallback to original format
+                    }
+                    
                     // Create form data
                     const formData = new FormData();
-                    const filename = `recording_${Date.now()}.${mimeType.split('/')[1]}`;
-                    formData.append('audio', audioBlob, filename);
+                    const filename = `recording_${Date.now()}.wav`;
+                    formData.append('audio', wavBlob, filename);
                     
                     // Upload to server
                     if (this.elements.manualRecordBtn) {

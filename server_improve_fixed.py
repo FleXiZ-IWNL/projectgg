@@ -506,17 +506,32 @@ class AudioProcessor:
             audio_file.save(temp_filepath)
             logger.info(f"📁 Temporary file saved: {temp_filepath}")
             
-            # Convert to WAV if needed (webm, ogg, mp3 need conversion)
-            if original_ext in ['.webm', '.ogg', '.mp3']:
-                logger.info(f"🔄 Converting {original_ext} to WAV...")
+            # If file is already WAV, skip conversion
+            if original_ext == '.wav':
+                # Already WAV, just rename
+                wav_filename = f"recording_{timestamp}.wav"
+                wav_filepath = os.path.join(self.config.STATIC_FOLDER, wav_filename)
+                if temp_filepath != wav_filepath:
+                    os.rename(temp_filepath, wav_filepath)
+                    filepath = wav_filepath
+                    filename = wav_filename
+                else:
+                    filepath = temp_filepath
+                    filename = temp_filename
+            elif original_ext in ['.webm', '.ogg', '.mp3']:
+                # Convert to WAV if needed (webm, ogg, mp3 need conversion)
+                # Limit duration to 10 seconds max for faster processing
+                MAX_AUDIO_DURATION = 10.0  # seconds
+                logger.info(f"🔄 Converting {original_ext} to WAV (max {MAX_AUDIO_DURATION}s)...")
                 try:
                     # Load audio using librosa with faster settings
                     # Use res_type='kaiser_fast' for faster processing
+                    # Limit duration to avoid long processing times
                     audio_data, sr = librosa.load(
                         temp_filepath, 
                         sr=self.config.SAMPLE_RATE,
                         res_type='kaiser_fast',
-                        duration=None  # Load full file
+                        duration=MAX_AUDIO_DURATION  # Limit to 10 seconds max
                     )
                     
                     # Save as WAV
