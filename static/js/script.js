@@ -1160,35 +1160,83 @@ class SnorePillowSystem {
                         const filename = `auto_recording_${Date.now()}.${mimeType.split('/')[1]}`;
                         formData.append('audio', audioBlob, filename);
                         
-                        // Upload to server
-                        const response = await fetch('/api/upload_audio', {
-                            method: 'POST',
-                            body: formData,
-                            credentials: 'include'
-                        });
+                        // Upload to server with timeout
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 seconds timeout
                         
-                        const data = await response.json();
-                        
-                        if (data.success) {
-                            console.log('Auto detection: Audio uploaded and processing started');
-                            this.lastAutoDetectionTime = Date.now();
+                        try {
+                            const response = await fetch('/api/upload_audio', {
+                                method: 'POST',
+                                body: formData,
+                                credentials: 'include',
+                                signal: controller.signal
+                            });
                             
-                            // Refresh data after processing
-                            setTimeout(async () => {
-                                try {
-                                    await Promise.all([
-                                        this.fetchStatus(),
-                                        this.fetchDetectionHistory(),
-                                        this.fetchLogs()
-                                    ]);
-                                } catch (error) {
-                                    console.error('Failed to refresh after auto detection:', error);
+                            clearTimeout(timeoutId);
+                            
+                            // Check if response is OK
+                            if (!response.ok) {
+                                const errorText = await response.text();
+                                console.error(`Upload failed: ${response.status} ${response.statusText}`, errorText);
+                                reject(new Error(`Upload failed: ${response.status} ${response.statusText}`));
+                                return;
+                            }
+                            
+                            // Check if response has content
+                            const contentType = response.headers.get('content-type');
+                            if (!contentType || !contentType.includes('application/json')) {
+                                const text = await response.text();
+                                console.error('Invalid response format:', text);
+                                reject(new Error('Invalid response format from server'));
+                                return;
+                            }
+                            
+                            // Parse JSON
+                            let data;
+                            try {
+                                const text = await response.text();
+                                if (!text || text.trim() === '') {
+                                    console.error('Empty response from server');
+                                    reject(new Error('Empty response from server'));
+                                    return;
                                 }
-                            }, 6000);
+                                data = JSON.parse(text);
+                            } catch (jsonError) {
+                                console.error('JSON parse error:', jsonError);
+                                reject(new Error('Failed to parse server response'));
+                                return;
+                            }
                             
-                            resolve(data);
-                        } else {
-                            reject(new Error(data.message || 'Upload failed'));
+                            if (data.success) {
+                                console.log('Auto detection: Audio uploaded and processing started');
+                                this.lastAutoDetectionTime = Date.now();
+                                
+                                // Refresh data after processing
+                                setTimeout(async () => {
+                                    try {
+                                        await Promise.all([
+                                            this.fetchStatus(),
+                                            this.fetchDetectionHistory(),
+                                            this.fetchLogs()
+                                        ]);
+                                    } catch (error) {
+                                        console.error('Failed to refresh after auto detection:', error);
+                                    }
+                                }, 6000);
+                                
+                                resolve(data);
+                            } else {
+                                reject(new Error(data.message || 'Upload failed'));
+                            }
+                        } catch (fetchError) {
+                            clearTimeout(timeoutId);
+                            if (fetchError.name === 'AbortError') {
+                                console.error('Upload timeout after 30 seconds');
+                                reject(new Error('Upload timeout - server took too long to respond'));
+                            } else {
+                                console.error('Upload error:', fetchError);
+                                reject(fetchError);
+                            }
                         }
                     } catch (error) {
                         reject(error);

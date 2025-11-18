@@ -510,8 +510,14 @@ class AudioProcessor:
             if original_ext in ['.webm', '.ogg', '.mp3']:
                 logger.info(f"🔄 Converting {original_ext} to WAV...")
                 try:
-                    # Load audio using librosa (handles most formats)
-                    audio_data, sr = librosa.load(temp_filepath, sr=self.config.SAMPLE_RATE)
+                    # Load audio using librosa with faster settings
+                    # Use res_type='kaiser_fast' for faster processing
+                    audio_data, sr = librosa.load(
+                        temp_filepath, 
+                        sr=self.config.SAMPLE_RATE,
+                        res_type='kaiser_fast',
+                        duration=None  # Load full file
+                    )
                     
                     # Save as WAV
                     wav_filename = f"recording_{timestamp}.wav"
@@ -526,23 +532,30 @@ class AudioProcessor:
                     
                     filepath = wav_filepath
                     filename = wav_filename
-                    logger.info(f"✅ Converted to WAV: {wav_filepath}")
+                    logger.info(f"✅ Converted to WAV: {wav_filepath} (duration: {len(audio_data)/sr:.2f}s)")
                 except Exception as conv_error:
-                    logger.warning(f"⚠️ Conversion failed: {conv_error}, trying to use original file")
-                    # If conversion fails, try to use original file
+                    logger.warning(f"⚠️ Conversion failed: {conv_error}, trying alternative method")
+                    # If conversion fails, try to use original file with different settings
                     wav_filename = f"recording_{timestamp}.wav"
                     wav_filepath = os.path.join(self.config.STATIC_FOLDER, wav_filename)
                     try:
-                        # Try to load and save again
+                        # Try to load with default sample rate first
                         audio_data, sr = librosa.load(temp_filepath, sr=None)
+                        # Resample if needed
+                        if sr != self.config.SAMPLE_RATE:
+                            audio_data = librosa.resample(audio_data, orig_sr=sr, target_sr=self.config.SAMPLE_RATE)
+                            sr = self.config.SAMPLE_RATE
                         sf.write(wav_filepath, audio_data, sr)
                         os.remove(temp_filepath)
                         filepath = wav_filepath
                         filename = wav_filename
-                    except:
-                        # Last resort: rename original file
+                        logger.info(f"✅ Converted using alternative method: {wav_filepath}")
+                    except Exception as alt_error:
+                        logger.error(f"❌ Alternative conversion also failed: {alt_error}")
+                        # Last resort: try to use original file (may not work with librosa)
                         filepath = temp_filepath
                         filename = temp_filename
+                        logger.warning(f"⚠️ Using original file format: {filename}")
             else:
                 # Already WAV or other supported format, just rename
                 wav_filename = f"recording_{timestamp}.wav"
@@ -1841,16 +1854,29 @@ def create_app():
             
             Thread(target=process_task, daemon=True).start()
             
-            return jsonify({
+            logger.info("✅ Audio upload accepted, processing started in background")
+            response_data = {
                 "success": True, 
                 "message": "Audio uploaded and processing started",
                 "filename": os.path.basename(audio_path)
-            })
+            }
+            return jsonify(response_data), 200
             
         except Exception as e:
             snore_system.data_store.update_status(is_recording=False)
-            logger.error(f"Upload audio API error: {str(e)}")
-            return jsonify({"success": False, "message": str(e)}), 500
+            logger.error(f"❌ Upload audio API error: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Make sure to return proper JSON even on error
+            try:
+                return jsonify({"success": False, "message": str(e)}), 500
+            except Exception as json_error:
+                # Last resort: return plain text if JSON fails
+                logger.error(f"❌ Failed to create JSON response: {json_error}")
+                from flask import Response
+                error_msg = str(e).replace('"', '\\"')  # Escape quotes
+                return Response(f'{{"success": false, "message": "{error_msg}"}}', 
+                              mimetype='application/json', status=500)
     
     @app.route('/api/auto_detect', methods=['POST'])
     @auth_middleware.require_auth
